@@ -3,18 +3,30 @@ Transparent, always-on-top overlay for the League of Legends window.
 
 Strokes are stored as world ground coordinates, not pixels, so they stay
 pinned to the map as the camera pans.
+
+Requires League running in Windowed mode, and the Replay API enabled in
+game.cfg so the camera pose can be read from /replay/render. See the README.
 """
 import sys
 import keyboard
 from calculations import GroundPlaneProjector
 from camera_feed import CameraFeed
+from dock import BrushDock
 from window_helper import find_window, get_client_rect_on_screen, set_main_window, set_click_through
-from PySide6.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QSlider, QLineEdit
+from PySide6.QtWidgets import QApplication, QWidget
 from PySide6.QtGui import QPainter, QPen, QColor
 from PySide6.QtCore import Qt, QTimer
 
 
 class Overlay(QWidget):
+    """
+    The drawing surface: frameless and translucent, sized to League's client
+    area so its pixels line up with the rendered view.
+
+    Outside draw mode it is click-through at the Win32 level, so clicks reach
+    the game. The rect is measured once, at construction.
+    """
+
     def __init__(self, left, top, width, height):
         super().__init__()
 
@@ -27,7 +39,7 @@ class Overlay(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
 
         self.drawing_window = int(self.winId())
-        self.league_window = find_window("League of Legends")
+        self.league_window = find_window("League of Legends (TM) Client")
         self.projector = GroundPlaneProjector(pixel_width=width, pixel_height=height)
 
         self.ground_strokes = []
@@ -37,7 +49,7 @@ class Overlay(QWidget):
 
         self.draw_mode = False
         self.setAttribute(Qt.WA_TransparentForMouseEvents, not self.draw_mode)
-        self.settings = None  # set from __main__ once SettingsWindow exists
+        self.dock = None  # set from __main__ once BrushDock exists
 
         self.camera_feed = CameraFeed(poll_hz=120)
         self.camera_feed.start()
@@ -45,6 +57,11 @@ class Overlay(QWidget):
         self.camera_timer = QTimer(self)
         self.camera_timer.timeout.connect(self.refresh_camera_position)
         self.camera_timer.start(8)
+
+    def showEvent(self, event):
+        # WA_TransparentForMouseEvents does not reach the native window
+        set_click_through(self.drawing_window, not self.draw_mode)
+        super().showEvent(event)
 
     def refresh_camera_position(self):
         """Reads the newest camera sample off the feed and updates the projector."""
@@ -77,11 +94,11 @@ class Overlay(QWidget):
             set_main_window(self.league_window)
 
     def wheelEvent(self, event):
-        if self.draw_mode and self.settings is not None and self.settings.isVisible():
+        if self.draw_mode and self.dock is not None and self.dock.isVisible():
             # drive the slider, not brush_width - its valueChanged signal is
             # what keeps the two in sync
             step = 1 if event.angleDelta().y() < 0 else -1
-            self.settings.slider.setValue(self.settings.slider.value() + step)
+            self.dock.slider.setValue(self.dock.slider.value() + step)
 
     def mousePressEvent(self, event):
         if self.draw_mode:
@@ -127,70 +144,14 @@ class Overlay(QWidget):
                 previous_pixel = pixel
 
 
-class SettingsWindow(QWidget):
-    """Sidebar panel for brush color and width, toggled with the . key."""
-
-    def __init__(self, main_window):
-        super().__init__(main_window)
-        self.main_window = main_window
-
-        self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
-        self.setStyleSheet("background-color: white; color: black;")
-
-        self.resize(220, 130)
-        self.move(main_window.x() + main_window.width() - 240, main_window.y() + 20)
-
-        layout = QVBoxLayout(self)
-
-        self.color_input = QLineEdit(main_window.current_color)
-        self.color_input.setPlaceholderText("#FFFFFF")
-        self.color_input.returnPressed.connect(self.on_color_changed)
-        layout.addWidget(self.color_input)
-
-        self.label = QLabel(f"Brush width: {main_window.brush_width}")
-        layout.addWidget(self.label)
-
-        self.slider = QSlider(Qt.Horizontal)
-        self.slider.setRange(1, 20)
-        self.slider.setValue(main_window.brush_width)
-        self.slider.valueChanged.connect(self.on_width_changed)
-        layout.addWidget(self.slider)
-
-        # hotkeys fire on the keyboard library's thread, but Qt windows can only
-        # be shown from the GUI thread - so the hotkey sets a flag and this
-        # timer does the work
-        self._toggle_requested = False
-        self.poll_timer = QTimer(self)
-        self.poll_timer.timeout.connect(self._apply_pending_toggle)
-        self.poll_timer.start(16)
-
-    def on_width_changed(self, value):
-        self.main_window.brush_width = value
-        self.label.setText(f"Brush width: {value}")
-
-    def on_color_changed(self):
-        text = self.color_input.text()
-        if QColor.isValidColor(text):
-            self.main_window.current_color = text
-
-    def toggle(self):
-        self._toggle_requested = True
-
-    def _apply_pending_toggle(self):
-        if self._toggle_requested:
-            self._toggle_requested = False
-            if self.main_window.draw_mode:
-                self.setVisible(not self.isVisible())
-
-        if not self.main_window.draw_mode and self.isVisible():
-            self.hide()
-
-
 def get_league_window_rect(app):
-    """League's client rect, converted into Qt's logical pixel space."""
+    """
+    The gameplay window's client rect in Qt's logical pixel space, or the whole
+    screen when no such window is up.
+    """
     qt_logical_screen_width = app.primaryScreen().size().width()
 
-    hwnd = find_window("League of Legends")
+    hwnd = find_window("League of Legends (TM) Client")
     if hwnd is not None:
         return get_client_rect_on_screen(hwnd, qt_logical_screen_width)
 
@@ -207,10 +168,12 @@ if __name__ == "__main__":
     window = Overlay(left, top, width, height)
     window.show()
 
-    settings = SettingsWindow(window)
-    window.settings = settings
+    dock = BrushDock(window)
+    window.dock = dock
 
     keyboard.add_hotkey('`', window.toggle_draw_mode)
-    keyboard.add_hotkey('.', settings.toggle)
+    keyboard.add_hotkey('.', dock.toggle)
+    keyboard.add_hotkey('[', lambda: dock.nudge_size(-1))
+    keyboard.add_hotkey(']', lambda: dock.nudge_size(+1))
 
     sys.exit(app.exec())
