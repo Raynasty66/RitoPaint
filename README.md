@@ -74,7 +74,7 @@ to draw mode.
 |---|---|
 | `` ` `` | toggle draw mode / click-through |
 | `.` | toggle the brush dock |
-| drag | draw a stroke |
+| click + drag | draw a stroke |
 | wheel | brush size (dock open) |
 | `ctrl+shift+q` | quit the overlay |
 
