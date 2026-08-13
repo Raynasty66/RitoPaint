@@ -5,7 +5,8 @@ Axes: y is camera height, z runs top/bottom of the screen, x runs left/right.
 """
 import math
 
-# Observer-camera defaults, read off telemetry.
+# Observer-camera defaults, read off telemetry. Height is only the starting
+# value - the Replay API's cameraPosition.y replaces it every frame.
 OBSERVER_CAMERA_HEIGHT = 1911.85
 OBSERVER_PITCH_DEG = 56.0
 LEAGUE_VFOV_DEG = 40.0
@@ -29,9 +30,13 @@ class GroundPlaneProjector:
         self.camera_x = 0.0
         self.camera_z = 0.0
 
-    def update_camera_position(self, camera_x: float, camera_z: float):
+    def update_camera_position(self, camera_x: float, camera_z: float,
+                               camera_height: float | None = None):
+        """Height is optional - omit it to keep the observer default."""
         self.camera_x = camera_x
         self.camera_z = camera_z
+        if camera_height is not None:
+            self.camera_height = camera_height
 
     def pixel_to_ground(self, pixel_x: int, pixel_y: int) -> tuple[float, float]:
         """Screen pixel -> ground (x, z). Pixel (0, 0) is the bottom left."""

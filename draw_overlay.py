@@ -15,7 +15,7 @@ from dock import BrushDock
 from window_helper import find_window, get_client_rect_on_screen, set_main_window, set_click_through
 from PySide6.QtWidgets import QApplication, QWidget
 from PySide6.QtGui import QPainter, QPen, QColor
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 
 
 class Overlay(QWidget):
@@ -26,6 +26,9 @@ class Overlay(QWidget):
     Outside draw mode it is click-through at the Win32 level, so clicks reach
     the game. The rect is measured once, at construction.
     """
+
+    # emitted from the keyboard thread, so it has to be a signal
+    quit_requested = Signal()
 
     def __init__(self, left, top, width, height):
         super().__init__()
@@ -58,10 +61,17 @@ class Overlay(QWidget):
         self.camera_timer.timeout.connect(self.refresh_camera_position)
         self.camera_timer.start(8)
 
+        self.quit_requested.connect(self.shutdown)
+
     def showEvent(self, event):
         # WA_TransparentForMouseEvents does not reach the native window
         set_click_through(self.drawing_window, not self.draw_mode)
         super().showEvent(event)
+
+    def shutdown(self):
+        """Stops the camera thread, then ends the event loop."""
+        self.camera_feed.stop()
+        QApplication.quit()
 
     def refresh_camera_position(self):
         """Reads the newest camera sample off the feed and updates the projector."""
@@ -74,7 +84,9 @@ class Overlay(QWidget):
         if not camera_position:
             return
 
-        self.projector.update_camera_position(camera_position["x"], camera_position["z"])
+        # y is the camera's height, which changes every time the view zooms
+        self.projector.update_camera_position(camera_position["x"], camera_position["z"],
+                                              camera_position.get("y"))
         self.update()
 
     def closeEvent(self, event):
@@ -173,7 +185,6 @@ if __name__ == "__main__":
 
     keyboard.add_hotkey('`', window.toggle_draw_mode)
     keyboard.add_hotkey('.', dock.toggle)
-    keyboard.add_hotkey('[', lambda: dock.nudge_size(-1))
-    keyboard.add_hotkey(']', lambda: dock.nudge_size(+1))
+    keyboard.add_hotkey('ctrl+shift+q', window.quit_requested.emit)
 
     sys.exit(app.exec())
