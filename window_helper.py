@@ -1,9 +1,8 @@
 """
 Locates the League of Legends window and toggles the overlay's click-through.
 
-Deliberately does not call SetProcessDPIAware(): Qt and these Win32 calls are
-both virtualized the same way in this DPI-unaware process, so leaving it alone
-is what keeps the two coordinate spaces in agreement.
+Win32 reports window geometry in physical pixels while Qt works in DPI-scaled
+logical ones, so rects are converted on the way out.
 """
 import ctypes
 from ctypes import wintypes
@@ -12,11 +11,18 @@ user32 = ctypes.windll.user32
 
 GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT = 0x00000020
+WS_EX_NOACTIVATE = 0x08000000
 SM_CXSCREEN = 0
 
 
 def find_window(title_substring) -> int | None:
-    """First top-level window whose title contains title_substring, or None."""
+    """
+    First top-level window whose title contains title_substring, or None.
+
+    Matches come back in z-order, so pass a substring unique to the window you
+    want. League's gameplay window is titled "League of Legends (TM) Client";
+    the launcher and its helper windows are titled "League of Legends".
+    """
     result = []
 
     @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
@@ -73,3 +79,9 @@ def set_click_through(hwnd, enabled):
     else:
         style &= ~WS_EX_TRANSPARENT
     user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style)
+
+
+def set_no_activate(hwnd):
+    """Lets a window be clicked without taking the foreground off League."""
+    style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+    user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE)
