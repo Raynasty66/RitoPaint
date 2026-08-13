@@ -7,6 +7,18 @@ Marks are stored as **world coordinates**, not screen pixels. Every frame, each
 point is re-projected through a model of the observer camera — so a circle drawn
 around the dragon pit stays on the dragon pit.
 
+## What it works with
+
+- League of Legends **replays**. The camera pose comes from the Replay API,
+  which only serves during replay playback, so live games are out of scope.
+- **Windows only** — the window lookup, always-on-top and click-through are all
+  Win32 calls.
+- League in **Windowed** mode, at any display scale. The overlay tracks the
+  gameplay window's client area, so it lines up with the rendered view rather
+  than with the screen.
+- A single monitor. The DPI conversion is read off the primary screen, so League
+  on a second display at a different scale will not line up.
+
 ## Requirements
 
 - Windows
@@ -55,7 +67,7 @@ It prints the rect it aligned to. That should match League's window - if it
 prints your full screen size, or a 1x1, no gameplay window was found.
 
 The overlay starts click-through, so League stays fully usable until you switch
-to draw mode. Global hotkeys may require running as administrator.
+to draw mode.
 
 ## Controls
 
@@ -64,8 +76,8 @@ to draw mode. Global hotkeys may require running as administrator.
 | `` ` `` | toggle draw mode / click-through |
 | `.` | toggle the brush dock |
 | drag | draw a stroke |
-| `[` `]` | brush size down / up |
 | wheel | brush size (dock open) |
+| `ctrl+shift+q` | quit the overlay |
 
 The brush dock is a small floating panel: an HSV wheel with a brightness bar,
 six quick-pick swatches, and a size slider with a live preview dot. Drag it by
@@ -80,7 +92,6 @@ game; clicks anywhere else pass through exactly as before.
 | marks don't stay pinned to the map | no camera samples, so the projector never updates — check `/replay/render` first |
 | overlay is 1 pixel wide, or `ZeroDivisionError` in `GroundPlaneProjector` | League is in exclusive fullscreen, where its window reports 2x2. Switch to Windowed |
 | overlay lands on the wrong window | `find_window` takes the first title match in z-order. It looks for `League of Legends (TM) Client`, which is unique to `League of Legends.exe`; the launcher is `League of Legends` |
-| hotkeys do nothing while the game has focus | Vanguard is active and the overlay is not elevated — run the terminal as administrator |
 | overlay does not follow League after you move or resize it | the rect is computed once, at startup. Restart the overlay |
 
 ## Files

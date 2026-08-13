@@ -407,7 +407,6 @@ class BrushDock(QWidget):
 
         # hotkeys fire on the keyboard thread - the timer applies them
         self._toggle_requested = False
-        self._pending_size_delta = 0
         self.poll_timer = QTimer(self)
         self.poll_timer.timeout.connect(self._poll)
         self.poll_timer.start(16)
@@ -504,9 +503,6 @@ class BrushDock(QWidget):
     def toggle(self):
         self._toggle_requested = True
 
-    def nudge_size(self, delta):
-        self._pending_size_delta += delta
-
     def _poll(self):
         if self._toggle_requested:
             self._toggle_requested = False
@@ -515,11 +511,6 @@ class BrushDock(QWidget):
 
         if not self.overlay.draw_mode and self.isVisible():
             self.hide()
-
-        if self._pending_size_delta:
-            delta, self._pending_size_delta = self._pending_size_delta, 0
-            if self.overlay.draw_mode:  # otherwise the keys belong to the game
-                self.slider.setValue(self.slider.value() + delta)
 
     # -- chrome --------------------------------------------------------------
 
