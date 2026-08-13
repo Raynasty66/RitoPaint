@@ -1,11 +1,10 @@
-# RiotPaint
+# RitoPaint
 
-A transparent, always-on-top overlay for League of Legends replays. Draw on the
+A transparent overlay for League of Legends replays. Draw on the
 map and the marks stay pinned to the ground as the camera pans.
 
-Marks are stored as **world coordinates**, not screen pixels. Every frame, each
-point is re-projected through a model of the observer camera — so a circle drawn
-around the dragon pit stays on the dragon pit.
+# Vid Link: 
+https://www.youtube.com/watch?v=MNPSYVdPsBc
 
 ## What it works with
 
@@ -64,7 +63,7 @@ python draw_overlay.py
 ```
 
 It prints the rect it aligned to. That should match League's window - if it
-prints your full screen size, or a 1x1, no gameplay window was found.
+prints your full screen size, or a 1x1, no gameplay window was found. 
 
 The overlay starts click-through, so League stays fully usable until you switch
 to draw mode.
