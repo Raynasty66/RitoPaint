@@ -77,6 +77,11 @@ to draw mode.
 Switch to another app and the strokes and brush dock hide; switch back to League
 and they return where they were. The hotkeys are ignored while they're hidden.
 
+The Replay API has no frame rate setting: each `/replay/render` reply waits for
+the game's next frame, so the camera updates exactly as often as League renders.
+For marks that keep up with fast pans, set **Esc → Video → Frame Rate Cap** to
+60 or higher (ideally your monitor's refresh rate) and leave VSync off.
+
 ## Controls
 
 | key | |
@@ -84,8 +89,10 @@ and they return where they were. The hotkeys are ignored while they're hidden.
 | `` ` `` | toggle draw mode / click-through |
 | `.` | toggle the brush dock |
 | click + drag | draw a stroke |
+| right-click + drag | erase — cuts strokes under the white circle, sized from the brush |
 | wheel | brush size (dock open) |
 | `ctrl+shift+q` | quit the overlay |
+| tray icon (red dot) | right-click for **Clear strokes** or **Quit RiotPaint** — reachable even while the overlay is hidden |
 
 The brush dock is a small floating panel: an HSV wheel with a brightness bar,
 six quick-pick swatches, and a size slider with a live preview dot. Drag it by
@@ -97,6 +104,7 @@ game; clicks anywhere else pass through exactly as before.
 | symptom | cause |
 |---|---|
 | `/replay/*` returns `Not Found` | `EnableReplayApi=1` missing from `game.cfg` — see Install. Also 404s while no replay is loaded |
+| marks trail behind the map while panning | League is rendering below 60 fps, and the camera only updates once per game frame. Raise the Frame Rate Cap in League's Video settings, or lower the graphics settings |
 | marks don't stay pinned to the map | no camera samples, so the projector never updates — check `/replay/render` first |
 | overlay is 1 pixel wide, or `ZeroDivisionError` in `GroundPlaneProjector` | League is in exclusive fullscreen, where its window reports 2x2. Switch to Windowed |
 | overlay lands on the wrong window | `find_window` takes the first title match in z-order. It looks for `League of Legends (TM) Client`, which is unique to `League of Legends.exe`; the launcher is `League of Legends` |
@@ -112,7 +120,8 @@ game; clicks anywhere else pass through exactly as before.
 | `draw_overlay.py` | the overlay window — input, painting, hotkeys |
 | `dock.py` | the floating brush dock — color wheel, swatches, size |
 | `calculations.py` | `GroundPlaneProjector`: pixel ⇄ ground conversion, against the real terrain |
+| `strokes.py` | stroke thinning, numpy-built painter paths, the eraser |
 | `terrain.py` | Summoner's Rift ground heights, read from the navigation grid in `Map11.wad.client` |
-| `camera_feed.py` | background camera poller, timestamped and extrapolated |
+| `camera_feed.py` | background camera poller; serves the newest pose as-is |
 | `window_helper.py` | locates League's client area, toggles native click-through |
 | `enable_replay_api.py` | one-time setup: switches on League's Replay API |

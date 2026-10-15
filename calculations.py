@@ -5,6 +5,8 @@ Axes: y is camera height, z runs top/bottom of the screen, x runs left/right.
 """
 import math
 
+import numpy as np
+
 from terrain import FlatTerrain
 
 # sight rays are walked down in steps this tall, then bisected to the surface
@@ -106,6 +108,24 @@ class GroundPlaneProjector:
         view_offset = self._view_offset_from_z_offset(z_offset, ground_y)
         return (self._pixel_column(x_offset / (self.half_width * depth)),
                 self._pixel_row(view_offset / (self.half_height * depth)))
+
+    def ground_to_pixels(self, points: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        ground_to_pixel for a whole (n, 3) array at once: pixel x, pixel y, and
+        which points are in front of the camera.
+        """
+        x_offset = points[:, 0] - self.camera_x
+        z_offset = points[:, 2] - self.camera_z
+        height_above = self.camera_height - points[:, 1]
+
+        depth = height_above * self.sin_theta + z_offset * self.cos_theta
+        visible = depth > 0
+        depth = np.where(visible, depth, 1.0)
+        view_offset = z_offset * self.sin_theta - height_above * self.cos_theta
+
+        pixel_x = (x_offset / (self.half_width * depth) + 1) * (self.render_width / 2)
+        pixel_y = (1 - view_offset / (self.half_height * depth)) * (self.render_height / 2)
+        return pixel_x, pixel_y, visible
 
     def _normalize_screen_coordinates(self, pixel_x: int, pixel_y: int) -> tuple[float, float]:
         """Pixel coordinates onto a -1..1 scale both ways."""

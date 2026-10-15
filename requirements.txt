@@ -3,3 +3,4 @@ keyboard
 requests
 urllib3
 zstandard
+numpy

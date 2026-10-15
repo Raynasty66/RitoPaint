@@ -10,14 +10,20 @@ game.cfg so the camera pose can be read from /replay/render. See the README.
 """
 import sys
 import keyboard
+import numpy as np
 from calculations import GroundPlaneProjector
 from camera_feed import CameraFeed
 from dock import BrushDock
+from strokes import erase, painter_path, simplify
 from terrain import FlatTerrain, Terrain
 from window_helper import find_window, get_client_rect_on_screen, is_in_front, set_main_window, set_click_through
-from PySide6.QtWidgets import QApplication, QWidget
-from PySide6.QtGui import QPainter, QPen, QColor
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
+from PySide6.QtGui import QAction, QIcon, QPainter, QPen, QPixmap, QColor
+from PySide6.QtCore import QPointF, Qt, QTimer, Signal
+
+# mouse moves closer than this to the last kept point add nothing visible
+MIN_POINT_SPACING_PX = 2.0
+MIN_ERASER_RADIUS_PX = 8.0
 
 
 class Overlay(QWidget):
@@ -50,8 +56,10 @@ class Overlay(QWidget):
         self.projector = GroundPlaneProjector(pixel_width=width, pixel_height=height,
                                               terrain=load_terrain())
 
-        self.ground_strokes = []
+        self.ground_strokes = []  # finished strokes, points as (n, 3) arrays
         self.current_stroke = {}
+        self.last_stroke_pixel = None
+        self.eraser_pixel = None  # where the eraser is while the right button is held
         self.current_color = "red"
         self.brush_width = 4
 
@@ -60,12 +68,16 @@ class Overlay(QWidget):
         self.dock = None  # set from __main__ once BrushDock exists
         self.dock_was_open = False
 
-        self.camera_feed = CameraFeed(poll_hz=120)
+        # each reply waits for the next game frame, so the frame cap sets the real rate
+        self.camera_feed = CameraFeed(poll_hz=240)
         self.camera_feed.start()
 
+        # the default coarse timer rounds 8 ms up to the 15.6 ms Windows tick
         self.camera_timer = QTimer(self)
+        self.camera_timer.setTimerType(Qt.PreciseTimer)
         self.camera_timer.timeout.connect(self.refresh_camera_position)
         self.camera_timer.start(8)
+        self.camera_pose = None
 
         # strokes only show while League (or the overlay, in draw mode) is in front
         self.focus_timer = QTimer(self)
@@ -86,8 +98,7 @@ class Overlay(QWidget):
 
     def refresh_camera_position(self):
         """Reads the newest camera sample off the feed and updates the projector."""
-        # raise the lead if strokes still lag behind fast pans
-        render = self.camera_feed.predicted(lead_seconds=0.0)
+        _, render = self.camera_feed.latest()
         if render is None:
             return
 
@@ -95,9 +106,19 @@ class Overlay(QWidget):
         if not camera_position:
             return
 
+        # a still camera needs no repaint
+        pose = (camera_position["x"], camera_position["z"], camera_position.get("y"))
+        if pose == self.camera_pose:
+            return
+        self.camera_pose = pose
+
         # y is the camera's height, which changes every time the view zooms
-        self.projector.update_camera_position(camera_position["x"], camera_position["z"],
-                                              camera_position.get("y"))
+        self.projector.update_camera_position(*pose)
+        self.update()
+
+    def clear_strokes(self):
+        self.ground_strokes = []
+        self.current_stroke = {}
         self.update()
 
     def follow_league_focus(self):
@@ -143,24 +164,67 @@ class Overlay(QWidget):
             self.dock.slider.setValue(self.dock.slider.value() + step)
 
     def mousePressEvent(self, event):
-        if self.draw_mode:
-            ground_point = self.projector.pixel_to_ground(event.position().x(), event.position().y())
-            self.current_stroke = {"points": [ground_point],
+        if not self.draw_mode:
+            return
+        x, y = event.position().x(), event.position().y()
+        if event.button() == Qt.RightButton:
+            self.eraser_pixel = (x, y)
+            self.erase_at(x, y)
+        elif event.button() == Qt.LeftButton:
+            self.current_stroke = {"points": [self.projector.pixel_to_ground(x, y)],
                                    "color": self.current_color,
                                    "width": self.brush_width}
-            self.update()
+            self.last_stroke_pixel = (x, y)
+        self.update()
 
     def mouseMoveEvent(self, event):
-        if self.draw_mode and self.current_stroke:
-            ground_point = self.projector.pixel_to_ground(event.position().x(), event.position().y())
-            self.current_stroke["points"].append(ground_point)
+        if not self.draw_mode:
+            return
+        x, y = event.position().x(), event.position().y()
+        if self.eraser_pixel is not None:
+            self.erase_along(x, y)
+        elif self.current_stroke:
+            last_x, last_y = self.last_stroke_pixel
+            if (x - last_x) ** 2 + (y - last_y) ** 2 < MIN_POINT_SPACING_PX ** 2:
+                return
+            self.current_stroke["points"].append(self.projector.pixel_to_ground(x, y))
+            self.last_stroke_pixel = (x, y)
             self.update()
 
     def mouseReleaseEvent(self, event):
-        if self.draw_mode:
-            self.ground_strokes.append(self.current_stroke)
+        if not self.draw_mode:
+            return
+        if event.button() == Qt.RightButton:
+            self.eraser_pixel = None
+        elif event.button() == Qt.LeftButton and self.current_stroke:
+            points = simplify(np.array(self.current_stroke["points"]))
+            self.ground_strokes.append(dict(self.current_stroke, points=points))
             self.current_stroke = {}
-            self.update()
+        self.update()
+
+    def eraser_radius(self):
+        return max(MIN_ERASER_RADIUS_PX, self.brush_width * 1.5)
+
+    def erase_along(self, x, y):
+        """Erases at steps of half the radius, so a fast drag leaves no gaps."""
+        last_x, last_y = self.eraser_pixel
+        steps = max(1, int(np.hypot(x - last_x, y - last_y) / (self.eraser_radius() / 2)))
+        for i in range(1, steps + 1):
+            self.erase_at(last_x + (x - last_x) * i / steps, last_y + (y - last_y) * i / steps)
+        self.eraser_pixel = (x, y)
+        self.update()
+
+    def erase_at(self, x, y):
+        """Cuts every stroke under the eraser circle, keeping the pieces either side."""
+        kept = []
+        for stroke in self.ground_strokes:
+            pieces = erase(stroke["points"], *self.projector.ground_to_pixels(stroke["points"]),
+                           x, y, self.eraser_radius(), self.projector.pixel_to_ground)
+            if pieces is None:
+                kept.append(stroke)
+            else:
+                kept += [dict(stroke, points=piece) for piece in pieces]
+        self.ground_strokes = kept
 
     def paintEvent(self, event):
         """Every point's pixel is recomputed here from its world coordinate."""
@@ -169,21 +233,19 @@ class Overlay(QWidget):
         all_strokes = self.ground_strokes + ([self.current_stroke] if self.current_stroke else [])
 
         for stroke in all_strokes:
-            pen = QPen(QColor(stroke["color"]))
-            pen.setWidth(stroke["width"])
-            painter.setPen(pen)
+            painter.setPen(QPen(QColor(stroke["color"]), stroke["width"],
+                                Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
 
-            previous_pixel = None
-            for ground_point in stroke["points"]:
-                pixel = self.projector.ground_to_pixel(*ground_point)
-                if pixel is None:
-                    previous_pixel = None
-                    continue
-                if previous_pixel is not None:
-                    painter.drawLine(previous_pixel[0], previous_pixel[1], pixel[0], pixel[1])
-                else:
-                    painter.drawPoint(*pixel)
-                previous_pixel = pixel
+            pixel_x, pixel_y, visible = self.projector.ground_to_pixels(np.asarray(stroke["points"]))
+            if visible.sum() == 1:
+                painter.drawPoint(QPointF(pixel_x[visible][0], pixel_y[visible][0]))
+            elif visible.any():
+                painter.drawPath(painter_path(pixel_x, pixel_y, visible))
+
+        if self.eraser_pixel is not None:
+            painter.setPen(QPen(QColor(255, 255, 255, 200), 1.5))
+            radius = self.eraser_radius()
+            painter.drawEllipse(QPointF(*self.eraser_pixel), radius, radius)
 
 
 def load_terrain():
@@ -193,6 +255,32 @@ def load_terrain():
     except (OSError, KeyError, ValueError) as exc:
         print(f"Terrain heights unavailable, drawing on a flat map: {exc}")
         return FlatTerrain()
+
+
+def make_tray_icon(app, overlay):
+    """Tray menu that stays reachable while the overlay is hidden behind another app."""
+    pixmap = QPixmap(64, 64)
+    pixmap.fill(Qt.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    painter.setBrush(QColor("#ff4d4d"))
+    painter.setPen(Qt.NoPen)
+    painter.drawEllipse(8, 8, 48, 48)
+    painter.end()
+
+    tray = QSystemTrayIcon(QIcon(pixmap), app)
+    tray.setToolTip("RiotPaint")
+    menu = QMenu()
+    clear = QAction("Clear strokes", menu)
+    clear.triggered.connect(overlay.clear_strokes)
+    quit_action = QAction("Quit RiotPaint", menu)
+    quit_action.triggered.connect(overlay.shutdown)
+    menu.addAction(clear)
+    menu.addSeparator()
+    menu.addAction(quit_action)
+    tray.setContextMenu(menu)
+    tray.show()
+    return tray, menu
 
 
 def get_league_window_rect(app):
@@ -221,6 +309,7 @@ if __name__ == "__main__":
 
     dock = BrushDock(window)
     window.dock = dock
+    tray = make_tray_icon(app, window)  # held so it isn't garbage-collected
 
     keyboard.add_hotkey('`', window.toggle_draw_mode)
     keyboard.add_hotkey('.', dock.toggle)

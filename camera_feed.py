@@ -2,8 +2,7 @@
 Background poller for the Replay API camera.
 
 Runs on its own thread over a keep-alive Session so painting never blocks on
-HTTP, and timestamps every sample so the pose can be extrapolated forward to
-the instant the overlay actually paints.
+HTTP. The overlay reads the newest position as-is - no extrapolation.
 """
 import threading
 import time
@@ -25,8 +24,7 @@ class CameraFeed:
         self._thread = None
         self._running = False
 
-        # two most recent samples, each (timestamp, render_dict)
-        self._previous = None
+        # newest sample, as (timestamp, render_dict)
         self._latest = None
 
         self.connected = False
@@ -63,7 +61,6 @@ class CameraFeed:
 
                 with self._lock:
                     if self._latest is not None:
-                        self._previous = self._latest
                         intervals.append(now - self._latest[0])
                         if len(intervals) > 60:
                             intervals.pop(0)
@@ -92,48 +89,3 @@ class CameraFeed:
                 return None, None
             timestamp, render = self._latest
             return time.perf_counter() - timestamp, render
-
-    def predicted(self, lead_seconds=0.0):
-        """
-        Extrapolate cameraPosition/cameraRotation from the last two samples to
-        (now + lead_seconds). A lead of 0 still corrects for however stale the
-        newest sample is. Returns a render dict shaped like the API response,
-        or None.
-        """
-        with self._lock:
-            latest = self._latest
-            previous = self._previous
-
-        if latest is None:
-            return None
-
-        latest_time, latest_render = latest
-        target_time = time.perf_counter() + lead_seconds
-
-        if previous is None:
-            return latest_render
-
-        previous_time, previous_render = previous
-        span = latest_time - previous_time
-        if span <= 1e-6:
-            return latest_render
-
-        extrapolation_dt = target_time - latest_time
-        # a hitch in the poll loop shouldn't fling the camera somewhere silly
-        extrapolation_dt = max(-span, min(extrapolation_dt, 4.0 * span))
-
-        predicted = dict(latest_render)
-        for key in ("cameraPosition", "cameraRotation"):
-            new = latest_render.get(key)
-            old = previous_render.get(key)
-            if not isinstance(new, dict) or not isinstance(old, dict):
-                continue
-            out = {}
-            for axis in ("x", "y", "z"):
-                a = float(old.get(axis, 0.0))
-                b = float(new.get(axis, 0.0))
-                velocity = (b - a) / span
-                out[axis] = b + velocity * extrapolation_dt
-            predicted[key] = out
-
-        return predicted
