@@ -13,6 +13,7 @@ GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT = 0x00000020
 WS_EX_NOACTIVATE = 0x08000000
 SM_CXSCREEN = 0
+GA_ROOTOWNER = 3
 
 
 def find_window(title_substring) -> int | None:
@@ -61,6 +62,14 @@ def get_client_rect_on_screen(hwnd, qt_logical_screen_width=None):
         left, top, width, height = (round(v * scale_factor) for v in (left, top, width, height))
 
     return left, top, width, height
+
+
+def is_in_front(hwnd) -> bool:
+    """True when hwnd, or a window it owns, is the foreground window and it isn't minimized."""
+    foreground = user32.GetForegroundWindow()
+    if not foreground or user32.IsIconic(hwnd):
+        return False
+    return user32.GetAncestor(foreground, GA_ROOTOWNER) == hwnd
 
 
 def set_main_window(hwnd: int):

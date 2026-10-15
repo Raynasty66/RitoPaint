@@ -17,6 +17,12 @@ https://www.youtube.com/watch?v=MNPSYVdPsBc
   than with the screen.
 - A single monitor. The DPI conversion is read off the primary screen, so League
   on a second display at a different scale will not line up.
+- Any window size. The overlay measures League's client area at startup and
+  builds the camera model from it, so no resolution is baked in — 1280x800
+  places marks exactly where 3840x2400 does. The camera's vertical field of
+  view is baked in, at 40 degrees, calibrated on a 16:10 window. Other aspect
+  ratios are handled by widening the view horizontally, which is the usual
+  convention but has not been checked against the game.
 
 ## Requirements
 
@@ -68,6 +74,9 @@ prints your full screen size, or a 1x1, no gameplay window was found.
 The overlay starts click-through, so League stays fully usable until you switch
 to draw mode.
 
+Switch to another app and the strokes and brush dock hide; switch back to League
+and they return where they were. The hotkeys are ignored while they're hidden.
+
 ## Controls
 
 | key | |
@@ -91,7 +100,10 @@ game; clicks anywhere else pass through exactly as before.
 | marks don't stay pinned to the map | no camera samples, so the projector never updates — check `/replay/render` first |
 | overlay is 1 pixel wide, or `ZeroDivisionError` in `GroundPlaneProjector` | League is in exclusive fullscreen, where its window reports 2x2. Switch to Windowed |
 | overlay lands on the wrong window | `find_window` takes the first title match in z-order. It looks for `League of Legends (TM) Client`, which is unique to `League of Legends.exe`; the launcher is `League of Legends` |
+| `Terrain heights unavailable, drawing on a flat map` at startup | `Map11.wad.client` was not found under a known League install, or a patch changed the navigation grid layout. Marks still work, but drift on the river and base ramps |
 | overlay does not follow League after you move or resize it | the rect is computed once, at startup. Restart the overlay |
+| marks sit too far left and right, or too close in, on a 16:9 or ultrawide window | `LEAGUE_VFOV_DEG` in `calculations.py` was calibrated at 16:10. Only the horizontal half-angle comes from your aspect ratio; the vertical one is fixed. Adjust the constant until a mark holds still |
+| marks drift when the observer camera tilts or changes zoom level | only `cameraPosition` is read live. `OBSERVER_PITCH_DEG` and `LEAGUE_VFOV_DEG` are constants, though `/replay/render` does serve `cameraRotation` and `fieldOfView` |
 
 ## Files
 
@@ -99,7 +111,8 @@ game; clicks anywhere else pass through exactly as before.
 |---|---|
 | `draw_overlay.py` | the overlay window — input, painting, hotkeys |
 | `dock.py` | the floating brush dock — color wheel, swatches, size |
-| `calculations.py` | `GroundPlaneProjector`: pixel ⇄ ground (y=0) conversion |
+| `calculations.py` | `GroundPlaneProjector`: pixel ⇄ ground conversion, against the real terrain |
+| `terrain.py` | Summoner's Rift ground heights, read from the navigation grid in `Map11.wad.client` |
 | `camera_feed.py` | background camera poller, timestamped and extrapolated |
 | `window_helper.py` | locates League's client area, toggles native click-through |
 | `enable_replay_api.py` | one-time setup: switches on League's Replay API |

@@ -506,7 +506,7 @@ class BrushDock(QWidget):
     def _poll(self):
         if self._toggle_requested:
             self._toggle_requested = False
-            if self.overlay.draw_mode:
+            if self.overlay.draw_mode and self.overlay.isVisible():
                 self.setVisible(not self.isVisible())
 
         if not self.overlay.draw_mode and self.isVisible():

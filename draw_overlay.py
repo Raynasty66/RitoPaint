@@ -2,7 +2,8 @@
 Transparent, always-on-top overlay for the League of Legends window.
 
 Strokes are stored as world ground coordinates, not pixels, so they stay
-pinned to the map as the camera pans.
+pinned to the map as the camera pans. Each point carries the terrain height
+under it, so marks in the river and on the base ramps sit where they were drawn.
 
 Requires League running in Windowed mode, and the Replay API enabled in
 game.cfg so the camera pose can be read from /replay/render. See the README.
@@ -12,7 +13,8 @@ import keyboard
 from calculations import GroundPlaneProjector
 from camera_feed import CameraFeed
 from dock import BrushDock
-from window_helper import find_window, get_client_rect_on_screen, set_main_window, set_click_through
+from terrain import FlatTerrain, Terrain
+from window_helper import find_window, get_client_rect_on_screen, is_in_front, set_main_window, set_click_through
 from PySide6.QtWidgets import QApplication, QWidget
 from PySide6.QtGui import QPainter, QPen, QColor
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -40,10 +42,13 @@ class Overlay(QWidget):
         self.setWindowTitle("RiotPaint Overlay")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
+        # coming back into view must not pull focus off League
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
 
         self.drawing_window = int(self.winId())
         self.league_window = find_window("League of Legends (TM) Client")
-        self.projector = GroundPlaneProjector(pixel_width=width, pixel_height=height)
+        self.projector = GroundPlaneProjector(pixel_width=width, pixel_height=height,
+                                              terrain=load_terrain())
 
         self.ground_strokes = []
         self.current_stroke = {}
@@ -53,6 +58,7 @@ class Overlay(QWidget):
         self.draw_mode = False
         self.setAttribute(Qt.WA_TransparentForMouseEvents, not self.draw_mode)
         self.dock = None  # set from __main__ once BrushDock exists
+        self.dock_was_open = False
 
         self.camera_feed = CameraFeed(poll_hz=120)
         self.camera_feed.start()
@@ -60,6 +66,11 @@ class Overlay(QWidget):
         self.camera_timer = QTimer(self)
         self.camera_timer.timeout.connect(self.refresh_camera_position)
         self.camera_timer.start(8)
+
+        # strokes only show while League (or the overlay, in draw mode) is in front
+        self.focus_timer = QTimer(self)
+        self.focus_timer.timeout.connect(self.follow_league_focus)
+        self.focus_timer.start(100)
 
         self.quit_requested.connect(self.shutdown)
 
@@ -89,11 +100,30 @@ class Overlay(QWidget):
                                               camera_position.get("y"))
         self.update()
 
+    def follow_league_focus(self):
+        """Hides the overlay, strokes and dock alike, whenever another app is in front."""
+        if self.league_window is None:
+            return
+        in_front = is_in_front(self.league_window) or is_in_front(self.drawing_window)
+        if in_front and not self.isVisible():
+            self.show()
+            if self.dock_was_open and self.draw_mode:
+                self.dock.show()
+        elif not in_front and self.isVisible():
+            # the dock is its own top-level window, so it doesn't hide with the overlay
+            self.dock_was_open = self.dock is not None and self.dock.isVisible()
+            if self.dock_was_open:
+                self.dock.hide()
+            self.hide()
+
     def closeEvent(self, event):
         self.camera_feed.stop()
         super().closeEvent(event)
 
     def toggle_draw_mode(self):
+        # the hotkey is global - ignore it while the user is in another app
+        if not self.isVisible():
+            return
         self.draw_mode = not self.draw_mode
         self.set_current_window()
         self.setAttribute(Qt.WA_TransparentForMouseEvents, not self.draw_mode)
@@ -144,8 +174,8 @@ class Overlay(QWidget):
             painter.setPen(pen)
 
             previous_pixel = None
-            for ground_x, ground_z in stroke["points"]:
-                pixel = self.projector.ground_to_pixel(ground_x, ground_z)
+            for ground_point in stroke["points"]:
+                pixel = self.projector.ground_to_pixel(*ground_point)
                 if pixel is None:
                     previous_pixel = None
                     continue
@@ -154,6 +184,15 @@ class Overlay(QWidget):
                 else:
                     painter.drawPoint(*pixel)
                 previous_pixel = pixel
+
+
+def load_terrain():
+    """Summoner's Rift heights from the League install, or a flat map if they can't be read."""
+    try:
+        return Terrain.from_install()
+    except (OSError, KeyError, ValueError) as exc:
+        print(f"Terrain heights unavailable, drawing on a flat map: {exc}")
+        return FlatTerrain()
 
 
 def get_league_window_rect(app):

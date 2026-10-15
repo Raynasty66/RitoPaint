@@ -1,9 +1,15 @@
 """
-Pixel <-> ground-plane (y=0) conversion for the League world.
+Pixel <-> ground conversion for the League world, against the real terrain.
 
 Axes: y is camera height, z runs top/bottom of the screen, x runs left/right.
 """
 import math
+
+from terrain import FlatTerrain
+
+# sight rays are walked down in steps this tall, then bisected to the surface
+RAY_STEP = 4.0
+RAY_REFINE_STEPS = 8
 
 # Observer-camera defaults, read off telemetry. Height is only the starting
 # value - the Replay API's cameraPosition.y replaces it every frame.
@@ -14,8 +20,9 @@ LEAGUE_VFOV_DEG = 40.0
 
 class GroundPlaneProjector:
     def __init__(self, camera_height=OBSERVER_CAMERA_HEIGHT, theta_deg=OBSERVER_PITCH_DEG,
-                 vfov_deg=LEAGUE_VFOV_DEG, pixel_width=3840, pixel_height=2400):
+                 vfov_deg=LEAGUE_VFOV_DEG, pixel_width=3840, pixel_height=2400, terrain=None):
         self.camera_height = camera_height
+        self.terrain = terrain if terrain is not None else FlatTerrain()
         self.render_width = pixel_width
         self.render_height = pixel_height
 
@@ -38,15 +45,49 @@ class GroundPlaneProjector:
         if camera_height is not None:
             self.camera_height = camera_height
 
-    def pixel_to_ground(self, pixel_x: int, pixel_y: int) -> tuple[float, float]:
-        """Screen pixel -> ground (x, z). Pixel (0, 0) is the bottom left."""
+    def pixel_to_ground(self, pixel_x: int, pixel_y: int) -> tuple[float, float, float]:
+        """
+        Screen pixel -> the first terrain point (x, y, z) the sight ray hits.
+
+        The ray is walked down from the map's highest ground; the first step
+        that lands at or under the terrain brackets the hit, then bisection
+        pins it. A ray over the sky-side edge of the map falls back to the
+        lowest ground.
+        """
         normalized_horizontally, normalized_vertically = self._normalize_screen_coordinates(pixel_x, pixel_y)
         ray_tilt = self._ray_tilt(normalized_vertically)
-        depth = self._depth_along_sightline(ray_tilt)
-        return (self.camera_x + self._x_offset(depth, normalized_horizontally),
-                self.camera_z + self._z_offset(depth, ray_tilt))
 
-    def ground_to_pixel(self, ground_x: float, ground_z: float) -> tuple[float, float] | None:
+        def hit(height):
+            depth = self._depth_along_sightline(ray_tilt, height)
+            return (self.camera_x + self._x_offset(depth, normalized_horizontally),
+                    self.camera_z + self._z_offset(depth, ray_tilt))
+
+        def under_ground(height):
+            return self.terrain.height(*hit(height)) >= height
+
+        above = self.terrain.max_height
+        below = None
+        height = above
+        while height > self.terrain.min_height:
+            height -= RAY_STEP
+            if under_ground(height):
+                below = height
+                break
+            above = height
+        if below is None:
+            below = above = self.terrain.min_height
+
+        for _ in range(RAY_REFINE_STEPS):
+            middle = (above + below) / 2
+            if under_ground(middle):
+                below = middle
+            else:
+                above = middle
+
+        x, z = hit(below)
+        return x, self.terrain.height(x, z), z
+
+    def ground_to_pixel(self, ground_x: float, ground_y: float, ground_z: float) -> tuple[float, float] | None:
         """
         Ground (x, z) -> the pixel it projects to from where the camera is now.
 
@@ -58,11 +99,11 @@ class GroundPlaneProjector:
         x_offset = ground_x - self.camera_x
         z_offset = ground_z - self.camera_z
 
-        depth = self._depth_from_z_offset(z_offset)
+        depth = self._depth_from_z_offset(z_offset, ground_y)
         if depth <= 0:
             return None
 
-        view_offset = self._view_offset_from_z_offset(z_offset)
+        view_offset = self._view_offset_from_z_offset(z_offset, ground_y)
         return (self._pixel_column(x_offset / (self.half_width * depth)),
                 self._pixel_row(view_offset / (self.half_height * depth)))
 
@@ -77,8 +118,8 @@ class GroundPlaneProjector:
         """Tilt of the camera-to-ground ray away from the sightline: 0 at screen centre."""
         return normalized_vertically * self.half_height
 
-    def _depth_along_sightline(self, ray_tilt: float) -> float:
-        return self.camera_height / (self.sin_theta - (ray_tilt * self.cos_theta))
+    def _depth_along_sightline(self, ray_tilt: float, ground_y: float) -> float:
+        return (self.camera_height - ground_y) / (self.sin_theta - (ray_tilt * self.cos_theta))
 
     def _z_offset(self, depth: float, ray_tilt: float) -> float:
         return depth * (self.cos_theta + ray_tilt * self.sin_theta)
@@ -86,12 +127,12 @@ class GroundPlaneProjector:
     def _x_offset(self, depth: float, normalized_horizontally: float) -> float:
         return normalized_horizontally * depth * self.half_width
 
-    def _depth_from_z_offset(self, z_offset: float) -> float:
-        return (self.camera_height * self.sin_theta) + (z_offset * self.cos_theta)
+    def _depth_from_z_offset(self, z_offset: float, ground_y: float) -> float:
+        return ((self.camera_height - ground_y) * self.sin_theta) + (z_offset * self.cos_theta)
 
-    def _view_offset_from_z_offset(self, z_offset: float) -> float:
+    def _view_offset_from_z_offset(self, z_offset: float, ground_y: float) -> float:
         """How far above (+) or below (-) the sightline the ground point sits."""
-        return (z_offset * self.sin_theta) - (self.camera_height * self.cos_theta)
+        return (z_offset * self.sin_theta) - ((self.camera_height - ground_y) * self.cos_theta)
 
     def _pixel_column(self, normalized_horizontally: float) -> float:
         return (normalized_horizontally + 1) * (self.render_width / 2)
